@@ -1,4 +1,5 @@
 ﻿using DataScraper.Entities;
+using DataScraper.XPath;
 using Microsoft.Data.SqlClient;
 using System.Data;
 
@@ -34,12 +35,12 @@ namespace DataScraper
             var categoryList = new List<KeyValuePair<string, string>>();
 
             var results = HttpClientLoader.Run(url);
-            var categoryNodes = results.DocumentNode.SelectNodes(XPath.Categories.CategoryNodes);
+            var categoryNodes = results.DocumentNode.SelectNodes(Categories.CategoryNodes);
 
             foreach (var categoryNode in categoryNodes!)
             {
-                var name = categoryNode.SelectSingleNode($".{XPath.Categories.CategoryName}")?.InnerText?.Trim();
-                var categoryUrl = categoryNode.SelectSingleNode($".{XPath.Categories.CategoryUrl}")?.GetAttributeValue("href", string.Empty);
+                var name = categoryNode.SelectSingleNode($".{Categories.CategoryName}")?.InnerText?.Trim();
+                var categoryUrl = categoryNode.SelectSingleNode($".{Categories.CategoryUrl}")?.GetAttributeValue("href", string.Empty);
 
                 if (string.IsNullOrWhiteSpace(categoryUrl))
                     continue;
@@ -52,6 +53,7 @@ namespace DataScraper
             {
                 var item = new Category()
                 {
+                    Id = Guid.NewGuid(),
                     Name = category.Key,
                     Description = $"This is {category.Key}"
                 };
@@ -62,7 +64,7 @@ namespace DataScraper
 
         public static void UpsertCategory(Category category)
         {
-            var existingCategory = GetCategoryById(category.Name);
+            var existingCategory = GetCategoryById(category.Name, category.ParentCategoryId);
 
             using var connection = new SqlConnection(ConnectionString);
             connection.Open();
@@ -76,7 +78,7 @@ namespace DataScraper
 
             if (existingCategory == null)
             {
-                var insertSql = "INSERT INTO Categories (Id, ParentCategoryId, Name, Description, CreatedDate, UpdatedDate, DeletedDate, IsDeleted) VALUES (@Id, @ParentCategoryId, @Name, @Description, @CreatedDate, @UpdatedDate, @DeletedDate, @IsDeleted)";
+                var insertSql = "INSERT INTO Categories (Id, ParentCategoryId, Name, Description, CreatedDate, UpdatedDate, DeletedDate, IsDeleted) VALUES (@Id, @ParentCategoryId, @Name, @Description, @CreatedDate, @UpdatedDate, @DeletedDate, @IsDeleted);";
                 using var insertCommand = new SqlCommand(insertSql, connection);
                 insertCommand.Parameters.Add("@Id", SqlDbType.UniqueIdentifier, 100).Value = category.Id;
                 insertCommand.Parameters.Add("@ParentCategoryId", SqlDbType.UniqueIdentifier, 100).Value = category.ParentCategoryId ?? (object)DBNull.Value;
@@ -88,14 +90,13 @@ namespace DataScraper
                 insertCommand.Parameters.Add("@IsDeleted", SqlDbType.Bit, 100).Value = category.IsDeleted;
 
                 int rowsInserted = insertCommand.ExecuteNonQuery();
-                if (rowsInserted != 1)
+                if (rowsInserted == 0)
                     Console.WriteLine("Insert failed.");
             }
             else
             {
-                var updateSql = "UPDATE Categories SET Id = @Id, ParentCategoryId = @ParentCategoryId, Name = @Name, Description = @Description, CreatedDate = GETDATE(), UpdatedDate = GETDATE(), DeletedDate = NULL, IsDeleted = 0 WHERE Name = @Name";
+                var updateSql = @"UPDATE Categories SET ParentCategoryId = @ParentCategoryId, Name = @Name, Description = @Description, CreatedDate = GETDATE(), UpdatedDate = GETDATE(), DeletedDate = NULL, IsDeleted = 0 WHERE Name = @Name AND ( (ParentCategoryId IS NULL AND @ParentCategoryId IS NULL) OR (ParentCategoryId = @ParentCategoryId) );";
                 using var updateCommand = new SqlCommand(updateSql, connection);
-                updateCommand.Parameters.Add("@Id", SqlDbType.UniqueIdentifier, 100).Value = category.Id;
                 updateCommand.Parameters.Add("@ParentCategoryId", SqlDbType.UniqueIdentifier, 100).Value = category.ParentCategoryId ?? (object)DBNull.Value;
                 updateCommand.Parameters.Add("@Name", SqlDbType.NVarChar, 100).Value = category.Name;
                 updateCommand.Parameters.Add("@Description", SqlDbType.NVarChar, 500).Value = category.Description;
@@ -105,18 +106,19 @@ namespace DataScraper
                 updateCommand.Parameters.Add("@IsDeleted", SqlDbType.Bit, 100).Value = category.IsDeleted;
 
                 int rowsUpdated = updateCommand.ExecuteNonQuery();
-                if (rowsUpdated != 1)
+                if (rowsUpdated == 0)
                     Console.WriteLine("Update failed.");
             }
         }
 
-        public static Category? GetCategoryById(string name)
+        public static Category? GetCategoryById(string name, Guid? parentCategoryId)
         {
             using var connection = new SqlConnection(ConnectionString);
             connection.Open();
 
-            var sql = "SELECT * FROM Categories WHERE Name = @Name";
+            var sql = "SELECT * FROM Categories WHERE Name = @Name AND ( (ParentCategoryId IS NULL AND @ParentCategoryId IS NULL) OR (ParentCategoryId = @ParentCategoryId) )";
             using var command = new SqlCommand(sql, connection);
+            command.Parameters.Add("@ParentCategoryId", SqlDbType.UniqueIdentifier).Value = parentCategoryId ?? (object)DBNull.Value;
             command.Parameters.Add("@Name", SqlDbType.NVarChar).Value = name;
 
             using var reader = command.ExecuteReader();

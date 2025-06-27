@@ -4,7 +4,7 @@ namespace DataScraper.Entities
 {
     public class Category : Base
     {
-        public Guid Id { get; set; } = Guid.NewGuid();
+        public Guid Id { get; set; }
 
         public Guid? ParentCategoryId { get; set; }
 
